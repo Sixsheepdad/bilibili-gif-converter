@@ -1,0 +1,46 @@
+{
+  "name": "bilibili-gif-converter",
+  "version": "1.0.0",
+  "description": "哔哩哔哩视频下载并转换为GIF",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "com.bilibili-gif-converter",
+    "productName": "Bilibili GIF Converter",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "bin/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@ffmpeg-installer/**/*",
+      "bin/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Bilibili GIF Converter"
+    }
+  },
+  "keywords": ["bilibili", "gif", "video", "converter"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^42.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+  }
+}
