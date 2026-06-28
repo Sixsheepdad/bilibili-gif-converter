@@ -87,6 +87,22 @@ npm run build
 
 生成的安装程序在 `dist/` 目录。
 
+## 常见问题
+
+### 解析失败：HTTP 412 Precondition Failed
+
+B 站近期更新了反爬机制，导致 yt-dlp 获取视频信息时返回 412 错误。
+
+**解决方案（v1.1.0+）：**
+- 已内置 `bin/bilibili_fetch.py` Python 脚本，自动绕过该问题
+- 无需手动操作，检测到 B 站链接会自动使用 Python 脚本解析
+- 依赖 Python 3 + `requests` 库（`pip install requests`）
+
+**如果仍报错：** 确保已安装 Python 3 和 requests 库：
+```bash
+pip install requests
+```
+
 ## 系统要求
 
 - Windows 10/11 (x64)
