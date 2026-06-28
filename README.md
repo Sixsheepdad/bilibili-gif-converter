@@ -90,8 +90,9 @@ npm run build
 ## 更新日志
 
 ### 2026-06-28 v1.1.0
-- **修复**：B 站解析失败（HTTP 412）——新增 Python 爬虫脚本 `bin/bilibili_fetch.py` 绕过了 yt-dlp 的请求限制
-- **优化**：改为通过 Python `requests` 库获取视频信息，稳定性提升
+- **修复**：B 站解析失败（HTTP 412）——新增 Python 爬虫脚本 `bin/bilibili_fetch.py`，绕过 yt-dlp 请求限制
+- **修复**：B 站下载同样 412 问题——获取信息后通过 `--load-info-json` + `--add-header` 传给 yt-dlp 下载
+- **优化**：改用 Python `requests` 库获取视频信息，解析和下载稳定性都提升
 
 ## 常见问题
 
