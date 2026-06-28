@@ -87,6 +87,12 @@ npm run build
 
 生成的安装程序在 `dist/` 目录。
 
+## 更新日志
+
+### 2026-06-28 v1.1.0
+- **修复**：B 站解析失败（HTTP 412）——新增 Python 爬虫脚本 `bin/bilibili_fetch.py` 绕过了 yt-dlp 的请求限制
+- **优化**：改为通过 Python `requests` 库获取视频信息，稳定性提升
+
 ## 常见问题
 
 ### 解析失败：HTTP 412 Precondition Failed
