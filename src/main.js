@@ -172,14 +172,11 @@ ipcMain.handle('download-video', async (event, url) => {
 // Get video info
 ipcMain.handle('get-video-info', async (event, url) => {
   return new Promise((resolve, reject) => {
-    const args = [
-      '--dump-json',
-      '--no-playlist',
-      '--socket-timeout', '30',
-      url,
-    ];
+    // Bilibili URLs need Python script workaround (yt-dlp 412 issue)
+    const isBilibili = url.includes('bilibili.com') || url.includes('b23.tv');
 
-    execFile(ytdlpPath, args, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
+    const execOpts = { maxBuffer: 1024 * 1024 * 10 };
+    const done = (err, stdout) => {
       if (err) {
         reject(new Error(`获取视频信息失败: ${err.message}`));
         return;
@@ -195,7 +192,15 @@ ipcMain.handle('get-video-info', async (event, url) => {
       } catch (e) {
         reject(new Error('解析视频信息失败'));
       }
-    });
+    };
+
+    if (isBilibili) {
+      const resourcesDir = process.resourcesPath || path.join(path.dirname(require.main.filename), '..');
+      const scriptPath = path.join(resourcesDir, 'app.asar.unpacked', 'bin', 'bilibili_fetch.py');
+      execFile('python', [scriptPath, '--dump-json', url], execOpts, done);
+    } else {
+      execFile(ytdlpPath, ['--dump-json', '--no-playlist', '--socket-timeout', '30', url], execOpts, done);
+    }
   });
 });
 
