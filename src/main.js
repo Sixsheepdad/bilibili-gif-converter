@@ -91,6 +91,19 @@ ipcMain.handle('check-cached', async (event, url) => {
   return { cached: false };
 });
 
+// Get Python script path for Bilibili workaround
+function getBilibiliScriptPath() {
+  const resourcesDir = process.resourcesPath || path.join(path.dirname(require.main.filename), '..');
+  const candidates = [
+    path.join(resourcesDir, 'app.asar.unpacked', 'bin', 'bilibili_fetch.py'),
+    path.join(__dirname, '..', 'bin', 'bilibili_fetch.py'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return candidates[0];
+}
+
 // Download video via yt-dlp
 ipcMain.handle('download-video', async (event, url) => {
   const downloadsDir = path.join(os.tmpdir(), 'bilibili-gif-converter');
@@ -106,66 +119,96 @@ ipcMain.handle('download-video', async (event, url) => {
   const outputPath = path.join(downloadsDir, '%(id)s.%(ext)s');
 
   return new Promise((resolve, reject) => {
-    const args = [
-      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-      '--merge-output-format', 'mp4',
-      '-o', outputPath,
-      '--no-playlist',
-      '--restrict-filenames',
-      '--socket-timeout', '30',
-      url,
-    ];
+    const isBilibili = url.includes('bilibili.com') || url.includes('b23.tv');
 
-    // Send progress updates
-    const proc = execFile(ytdlpPath, args, { maxBuffer: 1024 * 1024 * 50 });
-
-    let downloadedFile = '';
-    let errorOutput = '';
-
-    proc.stdout.on('data', (data) => {
-      const line = data.toString();
-      // Parse download progress: [download] XX.X% of ...
-      const match = line.match(/(\d+\.?\d*)%/);
-      if (match) {
-        event.sender.send('download-progress', parseFloat(match[1]));
-      }
-      // Parse destination line to get filename
-      const destMatch = line.match(/Destination: (.+)/);
-      if (destMatch) {
-        downloadedFile = destMatch[1].trim();
-      }
-      // Also check for merged output
-      const mergeMatch = line.match(/Merging formats into "(.+)"/);
-      if (mergeMatch) {
-        downloadedFile = mergeMatch[1].trim();
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) {
-        // Find the most recent mp4 file in downloads dir
-        const files = fs.readdirSync(downloadsDir);
-        const videoFiles = files.filter(f => /\.(mp4|mkv|webm)$/i.test(f));
-        if (videoFiles.length > 0) {
-          let newest = null, newestTime = 0;
-          for (const f of videoFiles) {
-            const stat = fs.statSync(path.join(downloadsDir, f));
-            if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = f; }
-          }
-          if (newest) {
-            resolve({ success: true, filePath: path.join(downloadsDir, newest) });
-            return;
-          }
-        }
-        reject(new Error('下载完成但找不到视频文件'));
+    function doDownload(target, infoPath) {
+      const args = [
+        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        '--merge-output-format', 'mp4',
+        '-o', outputPath,
+        '--no-playlist',
+        '--restrict-filenames',
+        '--socket-timeout', '30',
+      ];
+      if (infoPath) {
+        args.push('--load-info-json', infoPath);
+        args.push('--add-header', 'Referer:https://www.bilibili.com');
+        args.push('--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       } else {
-        reject(new Error(`下载失败 (code ${code}): ${errorOutput || '未知错误'}`));
+        args.push(target);
       }
-    });
+
+      const proc = execFile(ytdlpPath, args, { maxBuffer: 1024 * 1024 * 50 });
+
+      let downloadedFile = '';
+      let errorOutput = '';
+
+      proc.stdout.on('data', (data) => {
+        const line = data.toString();
+        const match = line.match(/(\d+\.?\d*)%/);
+        if (match) {
+          event.sender.send('download-progress', parseFloat(match[1]));
+        }
+        const destMatch = line.match(/Destination: (.+)/);
+        if (destMatch) { downloadedFile = destMatch[1].trim(); }
+        const mergeMatch = line.match(/Merging formats into "(.+)"/);
+        if (mergeMatch) { downloadedFile = mergeMatch[1].trim(); }
+      });
+
+      proc.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        // Clean up temp info json if used
+        if (infoPath) {
+          try { fs.unlinkSync(infoPath); } catch(e) {}
+        }
+
+        if (code === 0) {
+          const files = fs.readdirSync(downloadsDir);
+          const videoFiles = files.filter(f => /\.(mp4|mkv|webm)$/i.test(f));
+          if (videoFiles.length > 0) {
+            let newest = null, newestTime = 0;
+            for (const f of videoFiles) {
+              const stat = fs.statSync(path.join(downloadsDir, f));
+              if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = f; }
+            }
+            if (newest) {
+              resolve({ success: true, filePath: path.join(downloadsDir, newest) });
+              return;
+            }
+          }
+          reject(new Error('下载完成但找不到视频文件'));
+        } else {
+          reject(new Error(`下载失败 (code ${code}): ${errorOutput || '未知错误'}`));
+        }
+      });
+    }
+
+    if (isBilibili) {
+      // Use Python script to get fresh video info JSON, then feed to yt-dlp
+      const scriptPath = getBilibiliScriptPath();
+      const infoPath = path.join(downloadsDir, 'video_info.json');
+
+      execFile('python', [scriptPath, '--dump-json', url], { maxBuffer: 1024 * 1024 * 10 }, (err, stdout) => {
+        if (err) {
+          reject(new Error(`获取视频信息失败: ${err.message}`));
+          return;
+        }
+        try {
+          // Validate JSON
+          JSON.parse(stdout);
+          // Save to temp file for yt-dlp --load-info-json
+          fs.writeFileSync(infoPath, stdout, 'utf-8');
+          doDownload(url, infoPath);
+        } catch (e) {
+          reject(new Error('解析视频信息失败'));
+        }
+      });
+    } else {
+      doDownload(url, null);
+    }
   });
 });
 

@@ -57,27 +57,48 @@ def fetch_bilibili_info(url):
     formats = []
 
     # Process video streams
+    codec_map = {7: 'avc1', 12: 'hev1', 13: 'av01'}
     for v in dash.get('video', []):
+        cid_val = v.get('codecid', 7)
+        try:
+            fps_val = float(v.get('frameRate', 0))
+        except (ValueError, TypeError):
+            fps_val = 0
         fmt = {
             'format_id': f'dash-video-{v["id"]}',
             'ext': 'mp4',
-            'vcodec': v.get('codecid', 'avc1'),
+            'vcodec': codec_map.get(cid_val, 'avc1'),
             'acodec': 'none',
             'filesize': v.get('size', 0),
             'width': v.get('width', 0),
             'height': v.get('height', 0),
             'tbr': v.get('bandwidth', 0) / 1000.0,
-            'fps': v.get('frameRate', 0),
+            'fps': fps_val,
             'url': v.get('baseUrl', ''),
             'protocol': 'https',
             'resolution': f'{v.get("width", 0)}x{v.get("height", 0)}',
         }
         formats.append(fmt)
 
-    # Process audio streams
+    # Process audio streams - add audio format for merging
     for a in dash.get('audio', []):
-        if formats and 'baseUrl' in a:
-            formats[0]['acodec'] = 'mp4a'
+        try:
+            fps_val = float(a.get('frameRate', 0))
+        except (ValueError, TypeError):
+            fps_val = 0
+        fmt = {
+            'format_id': f'dash-audio-{a["id"]}',
+            'ext': 'm4a',
+            'vcodec': 'none',
+            'acodec': 'mp4a',
+            'filesize': a.get('size', 0),
+            'tbr': a.get('bandwidth', 0) / 1000.0,
+            'fps': fps_val,
+            'url': a.get('baseUrl', ''),
+            'protocol': 'https',
+            'resolution': 'audio',
+        }
+        formats.append(fmt)
 
     # Build result matching yt-dlp output
     result = {
