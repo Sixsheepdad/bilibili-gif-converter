@@ -1,6 +1,6 @@
 {
   "name": "bilibili-gif-converter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "哔哩哔哩视频下载并转换为GIF",
   "main": "src/main.js",
   "scripts": {
