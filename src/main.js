@@ -238,8 +238,7 @@ ipcMain.handle('get-video-info', async (event, url) => {
     };
 
     if (isBilibili) {
-      const resourcesDir = process.resourcesPath || path.join(path.dirname(require.main.filename), '..');
-      const scriptPath = path.join(resourcesDir, 'app.asar.unpacked', 'bin', 'bilibili_fetch.py');
+      const scriptPath = getBilibiliScriptPath();
       execFile('python', [scriptPath, '--dump-json', url], execOpts, done);
     } else {
       execFile(ytdlpPath, ['--dump-json', '--no-playlist', '--socket-timeout', '30', url], execOpts, done);
@@ -249,7 +248,11 @@ ipcMain.handle('get-video-info', async (event, url) => {
 
 // Convert video to GIF (direct FFmpeg call)
 ipcMain.handle('convert-to-gif', async (event, options) => {
-  const { inputPath, startTime, duration, width, fps, quality, cropArea } = options;
+  const { inputPath, startTime, duration, outputDuration, width, fps, quality, cropArea } = options;
+  const requestedPlaybackRate = Number(options.playbackRate);
+  const playbackRate = Number.isFinite(requestedPlaybackRate) && requestedPlaybackRate >= 0.25 && requestedPlaybackRate <= 4
+    ? requestedPlaybackRate
+    : 1;
 
   const outputDir = path.dirname(inputPath);
   const baseName = path.basename(inputPath, path.extname(inputPath));
@@ -265,9 +268,11 @@ ipcMain.handle('convert-to-gif', async (event, options) => {
 
   args.push('-i', inputPath);
 
-  // Duration limit
-  if (duration !== undefined && duration > 0) {
-    args.push('-t', String(duration));
+  // Limit the output on its adjusted timeline. This is important for slow
+  // motion, where a short source segment becomes a longer GIF.
+  const adjustedOutputDuration = outputDuration || (duration ? duration / playbackRate : 0);
+  if (adjustedOutputDuration > 0) {
+    args.push('-t', String(adjustedOutputDuration));
   }
 
   // Build filter chain
@@ -278,6 +283,12 @@ ipcMain.handle('convert-to-gif', async (event, options) => {
   if (cropArea && cropArea.w > 0 && cropArea.h > 0) {
     const { x, y, w, h } = cropArea;
     chainParts.push(`crop=${Math.round(w)}:${Math.round(h)}:${Math.round(x)}:${Math.round(y)}`);
+  }
+
+  // Change presentation timestamps so the generated GIF has the same speed
+  // as the preview selected by the user.
+  if (playbackRate !== 1) {
+    chainParts.push(`setpts=PTS/${playbackRate}`);
   }
 
   // FPS (put before scale for speed)
@@ -304,9 +315,10 @@ ipcMain.handle('convert-to-gif', async (event, options) => {
       stderr += data.toString();
       // Parse time progress
       const timeMatch = data.toString().match(/time=(\d+):(\d+):(\d+\.\d+)/);
-      if (timeMatch && duration) {
+      const progressDuration = adjustedOutputDuration;
+      if (timeMatch && progressDuration) {
         const elapsed = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseFloat(timeMatch[3]);
-        const pct = Math.min((elapsed / duration) * 100, 100);
+        const pct = Math.min((elapsed / progressDuration) * 100, 100);
         event.sender.send('convert-progress', pct);
       }
     });

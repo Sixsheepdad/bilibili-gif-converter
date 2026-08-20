@@ -234,6 +234,10 @@ function App() {
   const [startTime, setStartTime] = useState(0);
   const [endTime, setEndTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [currentAdjustedTime, setCurrentAdjustedTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Crop settings
   const [cropEnabled, setCropEnabled] = useState(false);
@@ -250,6 +254,58 @@ function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
 
   const videoRef = useRef(null);
+
+  // The trim timeline uses the duration after speed adjustment. The video
+  // element itself always exposes source-video time, so seek operations are
+  // converted between the two timelines.
+  const adjustedDuration = duration > 0 ? duration / playbackRate : 0;
+
+  const seekToAdjustedTime = (time) => {
+    if (!videoRef.current) return;
+    const safeTime = Math.max(0, Math.min(time, adjustedDuration));
+    videoRef.current.currentTime = safeTime * playbackRate;
+  };
+
+  const handlePlaybackRateChange = (newRate) => {
+    if (!Number.isFinite(newRate) || newRate <= 0) return;
+
+    // Keep the same source frames selected when switching speed. Only their
+    // positions on the adjusted timeline change.
+    const sourceStart = startTime * playbackRate;
+    const sourceEnd = endTime * playbackRate;
+    const newAdjustedDuration = duration > 0 ? duration / newRate : 0;
+
+    setPlaybackRate(newRate);
+    setStartTime(Math.min(sourceStart / newRate, newAdjustedDuration));
+    setEndTime(Math.min(sourceEnd / newRate, newAdjustedDuration));
+
+    if (videoRef.current) {
+      videoRef.current.playbackRate = newRate;
+      setCurrentAdjustedTime(videoRef.current.currentTime / newRate);
+    }
+  };
+
+  const togglePlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(() => setIsPlaying(false));
+    } else {
+      video.pause();
+    }
+  };
+
+  const handlePreviewSeek = (time) => {
+    setCurrentAdjustedTime(time);
+    seekToAdjustedTime(time);
+  };
+
+  const toggleMuted = () => {
+    if (!videoRef.current) return;
+    const nextMuted = !videoRef.current.muted;
+    videoRef.current.muted = nextMuted;
+    setIsMuted(nextMuted);
+  };
 
   // Listen for progress events
   useEffect(() => {
@@ -278,6 +334,7 @@ function App() {
     try {
       const info = await ipcRenderer.invoke('get-video-info', url.trim());
       setVideoInfo(info);
+      setPlaybackRate(1);
       setDuration(info.duration);
       setEndTime(info.duration);
       const cached = await ipcRenderer.invoke('check-cached', url.trim());
@@ -314,6 +371,8 @@ function App() {
   // Step 3: Go to settings
   const handleGoSettings = () => {
     if (endTime <= startTime) { showError('结束时间必须大于开始时间'); return; }
+    if (videoRef.current) videoRef.current.pause();
+    setIsPlaying(false);
     setStep('settings');
   };
 
@@ -323,14 +382,18 @@ function App() {
     setConvertProgress(0);
     setStatus(null);
 
-    const clipDuration = endTime - startTime;
+    const adjustedClipDuration = endTime - startTime;
+    const sourceStartTime = startTime * playbackRate;
+    const sourceClipDuration = adjustedClipDuration * playbackRate;
     const qualityMap = { low: 5, medium: 10, high: 15 };
     const fps = gifQuality === 'custom' ? gifFps : qualityMap[gifQuality];
 
     const options = {
       inputPath: videoPath,
-      startTime: startTime,
-      duration: clipDuration,
+      startTime: sourceStartTime,
+      duration: sourceClipDuration,
+      outputDuration: adjustedClipDuration,
+      playbackRate: playbackRate,
       width: 0,
       fps: fps,
       cropArea: cropEnabled ? cropArea : null,
@@ -363,6 +426,11 @@ function App() {
     setStatus(null);
     setStartTime(0);
     setEndTime(0);
+    setDuration(0);
+    setPlaybackRate(1);
+    setCurrentAdjustedTime(0);
+    setIsPlaying(false);
+    setIsMuted(false);
     setCropEnabled(false);
     setCropArea(null);
   };
@@ -454,6 +522,29 @@ function App() {
             <div className="video-section">
               <div className="section-title">✂️ 选择GIF片段</div>
 
+              <div className="speed-control">
+                <div>
+                  <label htmlFor="playback-rate">▶️ 播放倍速</label>
+                  <div className="help-tip">倍速会同时应用到视频预览和最终 GIF</div>
+                </div>
+                <select id="playback-rate" value={playbackRate}
+                  onChange={(e) => handlePlaybackRateChange(parseFloat(e.target.value))}>
+                  <option value="0.25">0.25×</option>
+                  <option value="0.5">0.5×</option>
+                  <option value="0.75">0.75×</option>
+                  <option value="1">1×（原速）</option>
+                  <option value="1.25">1.25×</option>
+                  <option value="1.5">1.5×</option>
+                  <option value="2">2×</option>
+                  <option value="3">3×</option>
+                  <option value="4">4×</option>
+                </select>
+                <div className="speed-duration">
+                  总时长 <strong>{formatTime(adjustedDuration)}</strong>
+                  {playbackRate !== 1 && <span>（原始 {formatTime(duration)}）</span>}
+                </div>
+              </div>
+
               {/* Crop toggle */}
               <div className="crop-toggle">
                 <input type="checkbox" id="crop-toggle" checked={cropEnabled}
@@ -471,13 +562,24 @@ function App() {
 
               {/* Video with crop overlay */}
               <div className="video-container" style={{ position: 'relative' }}>
-                <video ref={videoRef} src={`file:///${videoPath}`} controls preload="metadata"
+                <video ref={videoRef} src={`file:///${videoPath}`} preload="metadata"
                   style={{ display: 'block', width: '100%', maxHeight: 450, objectFit: 'contain' }}
+                  onTimeUpdate={() => {
+                    if (videoRef.current) setCurrentAdjustedTime(videoRef.current.currentTime / playbackRate);
+                  }}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
                   onLoadedMetadata={() => {
                     if (videoRef.current) {
                       const dur = videoRef.current.duration;
                       setDuration(dur);
-                      setEndTime(dur);
+                      setEndTime((currentEnd) => currentEnd > 0
+                        ? Math.min(currentEnd, dur / playbackRate)
+                        : dur / playbackRate);
+                      videoRef.current.playbackRate = playbackRate;
+                      videoRef.current.muted = isMuted;
+                      setCurrentAdjustedTime(videoRef.current.currentTime / playbackRate);
                     }
                   }}
                 />
@@ -486,6 +588,23 @@ function App() {
                   cropEnabled={cropEnabled}
                   onCropChange={setCropArea}
                 />
+              </div>
+
+              <div className="playback-controls">
+                <button className="playback-button" onClick={togglePlayback}
+                  aria-label={isPlaying ? '暂停' : '播放'}>
+                  {isPlaying ? '⏸' : '▶'}
+                </button>
+                <input type="range" min="0" max={adjustedDuration || 0} step="0.05"
+                  value={Math.min(currentAdjustedTime, adjustedDuration || 0)}
+                  onChange={(e) => handlePreviewSeek(parseFloat(e.target.value))} />
+                <span className="playback-time">
+                  {formatTime(currentAdjustedTime)} / {formatTime(adjustedDuration)}
+                </span>
+                <button className="playback-button" onClick={toggleMuted}
+                  aria-label={isMuted ? '取消静音' : '静音'}>
+                  {isMuted ? '🔇' : '🔊'}
+                </button>
               </div>
 
               {/* Crop info */}
@@ -498,23 +617,23 @@ function App() {
               <div className="timeline-section">
                 <div className="trim-row">
                   <label>开始时间</label>
-                  <input type="number" value={startTime.toFixed(1)} step="0.1" min="0" max={duration}
-                    onChange={(e) => { const v = parseFloat(e.target.value) || 0; setStartTime(v); if (videoRef.current) videoRef.current.currentTime = v; }}
+                  <input type="number" value={startTime.toFixed(1)} step="0.1" min="0" max={adjustedDuration}
+                    onChange={(e) => { const v = Math.max(0, Math.min(parseFloat(e.target.value) || 0, adjustedDuration)); setStartTime(v); seekToAdjustedTime(v); }}
                   />
                   <span className="time-display">{formatTime(startTime)}</span>
                   <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }}
-                    onClick={() => { if (videoRef.current) setStartTime(videoRef.current.currentTime); }}>
+                    onClick={() => { if (videoRef.current) setStartTime(videoRef.current.currentTime / playbackRate); }}>
                     设为当前
                   </button>
                 </div>
                 <div className="trim-row">
                   <label>结束时间</label>
-                  <input type="number" value={endTime.toFixed(1)} step="0.1" min="0" max={duration}
-                    onChange={(e) => { const v = parseFloat(e.target.value) || 0; setEndTime(v); if (videoRef.current) videoRef.current.currentTime = v; }}
+                  <input type="number" value={endTime.toFixed(1)} step="0.1" min="0" max={adjustedDuration}
+                    onChange={(e) => { const v = Math.max(0, Math.min(parseFloat(e.target.value) || 0, adjustedDuration)); setEndTime(v); seekToAdjustedTime(v); }}
                   />
                   <span className="time-display">{formatTime(endTime)}</span>
                   <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }}
-                    onClick={() => { if (videoRef.current) setEndTime(videoRef.current.currentTime); }}>
+                    onClick={() => { if (videoRef.current) setEndTime(videoRef.current.currentTime / playbackRate); }}>
                     设为当前
                   </button>
                 </div>
@@ -563,6 +682,7 @@ function App() {
                   <label>片段信息</label>
                   <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.8 }}>
                     <div>{formatTime(startTime)} → {formatTime(endTime)} ({(endTime - startTime).toFixed(1)}s)</div>
+                    <div>播放速度: {playbackRate}×</div>
                     <div>帧率: {gifQuality === 'custom' ? gifFps : { low: 5, medium: 10, high: 15 }[gifQuality]}fps</div>
                     {cropArea && <div>裁剪: {cropArea.w}×{cropArea.h}px</div>}
                   </div>
